@@ -1,4 +1,4 @@
-.PHONY: test test-race test-short lint format setup bench examples
+.PHONY: test test-race test-short lint gofmt format setup bench examples
 
 test:
 	go test ./... -count=1
@@ -11,9 +11,11 @@ test-short:
 
 lint:
 	go vet ./...
-	test -z "$$(gofmt -s -l .)"
 	@command -v golangci-lint >/dev/null 2>&1 && golangci-lint run ./... || \
-		(echo "golangci-lint not installed; running go vet and gofmt only" && true)
+		(echo "golangci-lint not installed; running go vet only" && true)
+
+gofmt:
+	test -z "$$(gofmt -s -l .)"
 
 format:
 	gofmt -s -w .

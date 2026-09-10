@@ -267,7 +267,7 @@ func TestRateLimitExactCount(t *testing.T) {
 	received := make([]int, 0)
 	deadline := time.Now().Add(150 * time.Millisecond)
 
-	receiveLoop:
+receiveLoop:
 	for len(received) < 2 {
 		if time.Now().After(deadline) {
 			break receiveLoop

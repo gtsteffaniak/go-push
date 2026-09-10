@@ -194,7 +194,8 @@ v1.0 emits up to `MaxItems` as soon as items arrive (first window), then refills
 ```bash
 make test        # unit tests
 make test-race   # race detector
-make lint        # go vet, gofmt, golangci-lint
+make lint        # go vet, golangci-lint
+make gofmt       # gofmt check (CI parity)
 make format      # gofmt -w
 make examples    # build examples/stock
 ```

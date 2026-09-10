@@ -23,12 +23,13 @@ make setup    # optional: install pre-commit hooks
 make test
 make test-race
 make lint
+make gofmt
 make format
 ```
 
 ## Pull requests
 
-- Run `make test-race` and `make lint` before opening a PR.
+- Run `make test-race`, `make lint`, and `make gofmt` before opening a PR.
 - Add tests for behavior changes, especially concurrency and overflow paths.
 - Update README and CHANGELOG for user-visible changes.
 
