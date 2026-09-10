@@ -224,12 +224,13 @@ func TestRateLimitBasic(t *testing.T) {
 	}
 
 	// Additional items should arrive in later windows.
+collectMore:
 	for len(received) < 6 {
 		select {
 		case val := <-p.Updates():
 			received = append(received, val)
 		case <-time.After(300 * time.Millisecond):
-			break
+			break collectMore
 		}
 	}
 
@@ -266,16 +267,17 @@ func TestRateLimitExactCount(t *testing.T) {
 	received := make([]int, 0)
 	deadline := time.Now().Add(150 * time.Millisecond)
 
+	receiveLoop:
 	for len(received) < 2 {
 		if time.Now().After(deadline) {
-			break
+			break receiveLoop
 		}
 		remaining := time.Until(deadline)
 		select {
 		case val := <-p.Updates():
 			received = append(received, val)
 		case <-time.After(remaining):
-			break
+			break receiveLoop
 		}
 	}
 
@@ -299,7 +301,6 @@ func TestRateLimitExactCount(t *testing.T) {
 		// Try to get the second value with a short timeout
 		select {
 		case val := <-p.Updates():
-			received = append(received, val)
 			if val != 1 {
 				t.Errorf("Expected second value to be 1, got %d", val)
 			}
@@ -484,12 +485,13 @@ func TestRateLimitConcurrent(t *testing.T) {
 	// Should receive items respecting rate limit
 	received := make([]int, 0)
 	timeout := time.After(2 * time.Second)
+collectRateLimit:
 	for len(received) < 10 {
 		select {
 		case val := <-p.Updates():
 			received = append(received, val)
 		case <-timeout:
-			break
+			break collectRateLimit
 		}
 	}
 
@@ -751,12 +753,13 @@ func TestRateLimitStress(t *testing.T) {
 	start := time.Now()
 	timeout := time.After(2 * time.Second)
 
+collectStress:
 	for len(received) < 20 {
 		select {
 		case val := <-p.Updates():
 			received = append(received, val)
 		case <-timeout:
-			break
+			break collectStress
 		}
 	}
 
