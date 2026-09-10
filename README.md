@@ -22,7 +22,7 @@ Use it for UI refresh coalescing, search debounce, API pacing, sensor sampling, 
 go get github.com/gtsteffaniak/go-push@v1.0.0
 ```
 
-Requires Go 1.22+.
+Requires Go 1.24+.
 
 ## Quick start
 
