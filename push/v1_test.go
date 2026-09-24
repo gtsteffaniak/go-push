@@ -418,6 +418,46 @@ collect:
 	}
 }
 
+// TestDropOldestPreservesEvictedOnFailedAdmission verifies that a failed
+// replacement admission does not discard an item an earlier Push accepted.
+func TestDropOldestPreservesEvictedOnFailedAdmission(t *testing.T) {
+	for i := 0; i < 10; i++ {
+		p := mustNew[int](t, Config{
+			Mode:        ModeQueue,
+			Interval:    0,
+			QueueSize:   2,
+			Overflow:    OverflowDropOldest,
+			DrainOnStop: true,
+		})
+
+		mustPush(t, p, 1)
+		mustPush(t, p, 2)
+		time.Sleep(10 * time.Millisecond) // run loop retains 1 and blocks emitting it
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		err := p.PushContext(ctx, 3)
+
+		go p.Stop()
+
+		var got []int
+		for v := range p.Updates() {
+			got = append(got, v)
+		}
+
+		if len(got) != 2 || got[0] != 1 {
+			t.Fatalf("iteration %d: got %v, want 2 items starting with 1", i, got)
+		}
+		if err == nil {
+			if got[1] != 3 {
+				t.Fatalf("iteration %d: admitted push dropped: got %v, want [1 3]", i, got)
+			}
+		} else if got[1] != 2 {
+			t.Fatalf("iteration %d: failed push discarded an accepted item: got %v, want [1 2]", i, got)
+		}
+	}
+}
+
 // TestOverflowDropOldestEvictsRetained verifies that a full mode-local queue
 // evicts its oldest item to admit the newest push instead of dropping the push.
 func TestOverflowDropOldestEvictsRetained(t *testing.T) {

@@ -186,20 +186,42 @@ func (p *Pacer[T]) pushDropOldest(ctx context.Context, item T) error {
 	if p.tryAcquire() {
 		return p.enqueueInput(ctx, item)
 	}
-	// Discard the oldest item still sitting in the input channel, if any.
+	// Make room by removing the oldest item still buffered in the input
+	// channel. The freed reservation is reused by the replacement so eviction
+	// and admission commit together; the removed item is restored if the
+	// replacement cannot be admitted.
 	select {
-	case <-p.input:
-		p.recordDrop("dropped oldest item")
-		p.releaseInFlight()
+	case evicted := <-p.input:
+		select {
+		case p.input <- item:
+			p.recordDrop("dropped oldest item")
+			return nil
+		case <-ctx.Done():
+			p.restoreInput(evicted)
+			return ctx.Err()
+		case <-p.done:
+			p.restoreInput(evicted)
+			return ErrStopped
+		}
 	default:
-	}
-	if p.tryAcquire() {
-		return p.enqueueInput(ctx, item)
 	}
 	// Capacity is held by mode-local storage that only the run loop can evict.
 	// Admit the new item and let the run loop drop the oldest retained item.
 	p.inFlight.Add(1)
 	return p.enqueueInput(ctx, item)
+}
+
+// restoreInput returns an item to the input channel after a failed drop-oldest
+// replacement so that a value an earlier Push accepted is not lost. If another
+// producer has already claimed the freed slot, the item is dropped and its
+// reservation released.
+func (p *Pacer[T]) restoreInput(item T) {
+	select {
+	case p.input <- item:
+	default:
+		p.releaseInFlight()
+		p.recordDrop("dropped oldest item")
+	}
 }
 
 func (p *Pacer[T]) pushBlock(ctx context.Context, item T) error {
