@@ -44,15 +44,13 @@ func main() {
     if err != nil {
         log.Fatal(err)
     }
-    defer p.Stop()
 
     if err := p.Push(42); err != nil {
         log.Fatal(err)
     }
 
-    for v := range p.Updates() {
-        log.Println(v)
-    }
+    log.Println(<-p.Updates())
+    p.Stop()
 }
 ```
 
@@ -134,7 +132,7 @@ stats := p.Stats()
 - **Stats API** — observability for emitted/dropped/pending counts
 - **Rate-limit fix** — up to `MaxItems` flush immediately, then per-interval windows
 - **Stop safety** — `Updates()` never returns `nil` after `Stop`; debounce stop race fixed
-- **CI & tests** — race detector, Go/OS matrix, golangci-lint, govulncheck
+- **CI & tests** — race detector, Go/OS matrix, go vet, govulncheck
 
 See [CHANGELOG.md](CHANGELOG.md) for the full list.
 
@@ -194,7 +192,7 @@ v1.0 emits up to `MaxItems` as soon as items arrive (first window), then refills
 ```bash
 make test        # unit tests
 make test-race   # race detector
-make lint        # go vet, golangci-lint
+make lint        # go vet
 make gofmt       # gofmt check (CI parity)
 make format      # gofmt -w
 make examples    # build examples/stock

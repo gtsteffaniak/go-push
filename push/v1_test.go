@@ -24,6 +24,20 @@ func TestNewInvalidConfig(t *testing.T) {
 	if !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("got %v, want ErrInvalidConfig", err)
 	}
+
+	_, err = New[int](Config{Mode: ModeQueue, Overflow: Overflow(99)})
+	if !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("invalid overflow: got %v, want ErrInvalidConfig", err)
+	}
+}
+
+func TestRateLimitDefaultQueueSize(t *testing.T) {
+	p := mustNew[int](t, Config{Mode: ModeRateLimit, Interval: time.Millisecond, MaxItems: 1})
+	defer p.Stop()
+
+	if got := p.maxPending(); got != 100 {
+		t.Fatalf("maxPending = %d, want 100", got)
+	}
 }
 
 func TestOverflowDropNewest(t *testing.T) {
@@ -318,6 +332,31 @@ func TestDrainOnStop(t *testing.T) {
 	}
 	if received != 3 {
 		t.Fatalf("DrainOnStop: got %d items, want 3", received)
+	}
+}
+
+// TestQueueDrainIncludesInputBuffer verifies that values accepted by Push but
+// still buffered in the input channel are drained on Stop, not lost.
+func TestQueueDrainIncludesInputBuffer(t *testing.T) {
+	p := mustNew[int](t, Config{
+		Mode:        ModeQueue,
+		Interval:    0,
+		QueueSize:   4,
+		DrainOnStop: true,
+	})
+
+	mustPush(t, p, 1)
+	mustPush(t, p, 2)
+	time.Sleep(20 * time.Millisecond) // let the run loop pick up 1 and block emitting it
+
+	go p.Stop()
+
+	var got []int
+	for v := range p.Updates() {
+		got = append(got, v)
+	}
+	if len(got) != 2 || got[0] != 1 || got[1] != 2 {
+		t.Fatalf("shutdown drain: got %v, want [1 2]", got)
 	}
 }
 

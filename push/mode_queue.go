@@ -26,6 +26,10 @@ func (p *Pacer[T]) runQueue(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			p.collectInput(func(val T) {
+				queue = append(queue, val)
+				p.setPending(len(queue))
+			})
 			p.drainQueue(context.Background(), &queue)
 			return
 
@@ -66,15 +70,11 @@ func (p *Pacer[T]) runQueueUnpaced(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			if p.config.DrainOnStop {
-				for len(queue) > 0 {
-					if !p.sendBlocking(context.Background(), queue[0]) {
-						break
-					}
-					queue = queue[1:]
-				}
-			}
-			p.setPending(0)
+			p.collectInput(func(val T) {
+				queue = append(queue, val)
+				p.setPending(len(queue))
+			})
+			p.drainQueue(context.Background(), &queue)
 			return
 
 		case val := <-p.input:

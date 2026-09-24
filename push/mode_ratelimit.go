@@ -31,6 +31,10 @@ func (p *Pacer[T]) runRateLimit(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			p.collectInput(func(val T) {
+				pending = append(pending, val)
+				p.setPending(len(pending))
+			})
 			if p.config.DrainOnStop {
 				// ctx is already canceled here, so use a fresh context to
 				// deliver the remaining items instead of discarding them.

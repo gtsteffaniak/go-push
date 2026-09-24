@@ -16,10 +16,8 @@
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
-//	defer p.Stop()
 //
 //	p.Push(42)
-//	for v := range p.Updates() {
-//	    fmt.Println(v)
-//	}
+//	fmt.Println(<-p.Updates())
+//	p.Stop()
 package push

@@ -126,6 +126,22 @@ func (p *Pacer[T]) releaseInFlight() {
 	p.inFlight.Add(-1)
 }
 
+// collectInput moves every value still buffered in the input channel into
+// collect. It first waits for p.done so that no sender can add a value after
+// the channel is observed empty, ensuring values accepted by Push are not lost
+// during shutdown.
+func (p *Pacer[T]) collectInput(collect func(T)) {
+	<-p.done
+	for {
+		select {
+		case val := <-p.input:
+			collect(val)
+		default:
+			return
+		}
+	}
+}
+
 // enqueueInput sends item to the run loop. The caller must already hold a
 // reservation from tryAcquire; the reservation is released if the send fails.
 func (p *Pacer[T]) enqueueInput(ctx context.Context, item T) error {

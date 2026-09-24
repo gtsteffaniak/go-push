@@ -63,7 +63,7 @@ func (c Config) withDefaults() Config {
 	if c.MaxItems <= 0 {
 		c.MaxItems = 10
 	}
-	if c.QueueSize <= 0 && c.Mode == ModeQueue {
+	if c.QueueSize <= 0 && (c.Mode == ModeQueue || c.Mode == ModeRateLimit) {
 		c.QueueSize = 100
 	}
 	if c.PushTimeout <= 0 {
@@ -97,6 +97,11 @@ func (c Config) Validate() error {
 		}
 	}
 	if c.QueueSize < 0 {
+		return ErrInvalidConfig
+	}
+	switch c.Overflow {
+	case OverflowDropNewest, OverflowDropOldest, OverflowBlock:
+	default:
 		return ErrInvalidConfig
 	}
 	return nil
