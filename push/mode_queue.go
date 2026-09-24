@@ -32,8 +32,13 @@ func (p *Pacer[T]) runQueue(ctx context.Context) {
 		case val := <-p.input:
 			p.releaseInFlight()
 			if cap > 0 && len(queue) >= cap {
-				p.recordDrop("queue full")
-				continue
+				if p.config.Overflow == OverflowDropOldest {
+					queue = queue[1:]
+					p.recordDrop("dropped oldest item")
+				} else {
+					p.recordDrop("queue full")
+					continue
+				}
 			}
 			queue = append(queue, val)
 			p.setPending(len(queue))
@@ -75,8 +80,13 @@ func (p *Pacer[T]) runQueueUnpaced(ctx context.Context) {
 		case val := <-p.input:
 			p.releaseInFlight()
 			if cap > 0 && len(queue) >= cap {
-				p.recordDrop("queue full")
-				continue
+				if p.config.Overflow == OverflowDropOldest {
+					queue = queue[1:]
+					p.recordDrop("dropped oldest item")
+				} else {
+					p.recordDrop("queue full")
+					continue
+				}
 			}
 			queue = append(queue, val)
 			p.setPending(len(queue))

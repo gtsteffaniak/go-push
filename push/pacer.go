@@ -94,17 +94,24 @@ func (p *Pacer[T]) maxPending() int {
 	return 0
 }
 
-func (p *Pacer[T]) atCapacity() bool {
-	cap := p.maxPending()
-	if cap <= 0 {
-		return false
+// tryAcquire atomically reserves one capacity slot, counting both items still in
+// the input channel and items retained in mode-local storage. It returns false
+// when the pipeline is already at capacity. The reservation is released by
+// releaseInFlight when the item leaves the pipeline.
+func (p *Pacer[T]) tryAcquire() bool {
+	limit := p.maxPending()
+	if limit <= 0 {
+		p.inFlight.Add(1)
+		return true
 	}
-	switch p.config.Mode {
-	case ModeQueue, ModeRateLimit:
-		total := int(p.pending.Load()) + int(p.inFlight.Load())
-		return total >= cap
-	default:
-		return false
+	for {
+		cur := int(p.inFlight.Load())
+		if cur+int(p.pending.Load()) >= limit {
+			return false
+		}
+		if p.inFlight.CompareAndSwap(int32(cur), int32(cur+1)) {
+			return true
+		}
 	}
 }
 
@@ -115,16 +122,13 @@ func (p *Pacer[T]) emit(ctx context.Context, item T) bool {
 	return p.trySend(ctx, item)
 }
 
-func (p *Pacer[T]) acquireInFlight() {
-	p.inFlight.Add(1)
-}
-
 func (p *Pacer[T]) releaseInFlight() {
 	p.inFlight.Add(-1)
 }
 
+// enqueueInput sends item to the run loop. The caller must already hold a
+// reservation from tryAcquire; the reservation is released if the send fails.
 func (p *Pacer[T]) enqueueInput(ctx context.Context, item T) error {
-	p.acquireInFlight()
 	select {
 	case p.input <- item:
 		return nil
@@ -138,7 +142,7 @@ func (p *Pacer[T]) enqueueInput(ctx context.Context, item T) error {
 }
 
 func (p *Pacer[T]) pushDropNewest(ctx context.Context, item T) error {
-	if !p.atCapacity() {
+	if p.tryAcquire() {
 		return p.enqueueInput(ctx, item)
 	}
 
@@ -146,7 +150,7 @@ func (p *Pacer[T]) pushDropNewest(ctx context.Context, item T) error {
 	defer timer.Stop()
 
 	for {
-		if !p.atCapacity() {
+		if p.tryAcquire() {
 			return p.enqueueInput(ctx, item)
 		}
 		select {
@@ -163,15 +167,22 @@ func (p *Pacer[T]) pushDropNewest(ctx context.Context, item T) error {
 }
 
 func (p *Pacer[T]) pushDropOldest(ctx context.Context, item T) error {
-	if !p.atCapacity() {
+	if p.tryAcquire() {
 		return p.enqueueInput(ctx, item)
 	}
+	// Discard the oldest item still sitting in the input channel, if any.
 	select {
 	case <-p.input:
 		p.recordDrop("dropped oldest item")
 		p.releaseInFlight()
 	default:
 	}
+	if p.tryAcquire() {
+		return p.enqueueInput(ctx, item)
+	}
+	// Capacity is held by mode-local storage that only the run loop can evict.
+	// Admit the new item and let the run loop drop the oldest retained item.
+	p.inFlight.Add(1)
 	return p.enqueueInput(ctx, item)
 }
 
@@ -180,7 +191,7 @@ func (p *Pacer[T]) pushBlock(ctx context.Context, item T) error {
 		if atomic.LoadInt32(&p.stopped) != 0 {
 			return ErrStopped
 		}
-		if !p.atCapacity() {
+		if p.tryAcquire() {
 			err := p.enqueueInput(ctx, item)
 			if err == nil || err == ErrStopped {
 				return err

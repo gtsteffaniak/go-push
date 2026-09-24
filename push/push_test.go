@@ -828,7 +828,11 @@ func TestConcurrentPushAndStop(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 100; j++ {
-				mustPush(t, p, j)
+				// Stop may win the race with a producer; ErrStopped is the
+				// documented result in that case.
+				if err := p.Push(j); err != nil && !errors.Is(err, ErrStopped) {
+					t.Errorf("Push: %v", err)
+				}
 			}
 		}()
 	}

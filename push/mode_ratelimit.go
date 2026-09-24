@@ -10,17 +10,20 @@ func (p *Pacer[T]) runRateLimit(ctx context.Context) {
 	defer ticker.Stop()
 
 	pending := make([]T, 0, p.config.MaxItems)
-	cap := p.maxPending()
+	limit := p.maxPending()
+
+	// tokens is the single emission budget for the current interval. It is
+	// refilled only when the ticker fires so that repeated flushes cannot emit
+	// more than MaxItems per interval.
+	tokens := p.config.MaxItems
 
 	flush := func() {
-		sent := 0
-		limit := p.config.MaxItems
-		for sent < limit && len(pending) > 0 {
+		for tokens > 0 && len(pending) > 0 {
 			if !p.emit(ctx, pending[0]) {
 				break
 			}
 			pending = pending[1:]
-			sent++
+			tokens--
 		}
 		p.setPending(len(pending))
 	}
@@ -29,8 +32,10 @@ func (p *Pacer[T]) runRateLimit(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			if p.config.DrainOnStop {
+				// ctx is already canceled here, so use a fresh context to
+				// deliver the remaining items instead of discarding them.
 				for len(pending) > 0 {
-					if !p.sendBlocking(ctx, pending[0]) {
+					if !p.sendBlocking(context.Background(), pending[0]) {
 						break
 					}
 					pending = pending[1:]
@@ -41,21 +46,21 @@ func (p *Pacer[T]) runRateLimit(ctx context.Context) {
 
 		case val := <-p.input:
 			p.releaseInFlight()
-			if cap > 0 && len(pending) >= cap {
-				p.recordDrop("rate limit pending full")
-				continue
+			if limit > 0 && len(pending) >= limit {
+				if p.config.Overflow == OverflowDropOldest {
+					pending = pending[1:]
+					p.recordDrop("dropped oldest item")
+				} else {
+					p.recordDrop("rate limit pending full")
+					continue
+				}
 			}
 			pending = append(pending, val)
 			p.setPending(len(pending))
-			for {
-				before := len(pending)
-				flush()
-				if len(pending) == 0 || len(pending) == before {
-					break
-				}
-			}
+			flush()
 
 		case <-ticker.C:
+			tokens = p.config.MaxItems
 			flush()
 		}
 	}

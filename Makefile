@@ -11,8 +11,6 @@ test-short:
 
 lint:
 	go vet ./...
-	@command -v golangci-lint >/dev/null 2>&1 && golangci-lint run ./... || \
-		(echo "golangci-lint not installed; running go vet only" && true)
 
 gofmt:
 	test -z "$$(gofmt -s -l .)"

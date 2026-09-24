@@ -25,7 +25,9 @@ func main() {
 	}
 	defer p.Stop()
 
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		for i := 0; i < 15; i++ {
 			price := 100.0 + rand.Float64()*10
 			fmt.Printf("-> PRODUCING: $%.2f\n", price)
@@ -37,12 +39,12 @@ func main() {
 		}
 	}()
 
-	count := 0
+	go func() {
+		<-done
+		p.Stop()
+	}()
+
 	for update := range p.Updates() {
 		fmt.Printf("[THROTTLE] %s is $%.2f\n", update.Symbol, update.Price)
-		count++
-		if count >= 5 {
-			break
-		}
 	}
 }

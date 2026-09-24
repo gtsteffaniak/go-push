@@ -321,6 +321,96 @@ func TestDrainOnStop(t *testing.T) {
 	}
 }
 
+func TestRateLimitDrainOnStop(t *testing.T) {
+	p := mustNew[int](t, Config{
+		Mode:        ModeRateLimit,
+		Interval:    time.Second,
+		MaxItems:    2,
+		QueueSize:   16,
+		DrainOnStop: true,
+	})
+
+	for i := 0; i < 5; i++ {
+		mustPush(t, p, i)
+	}
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		p.Stop()
+	}()
+
+	received := 0
+	for range p.Updates() {
+		received++
+	}
+	if received != 5 {
+		t.Fatalf("RateLimit DrainOnStop: got %d items, want 5", received)
+	}
+}
+
+// TestRateLimitBudgetPerInterval verifies that a fast consumer cannot cause the
+// pacer to emit more than MaxItems within a single interval.
+func TestRateLimitBudgetPerInterval(t *testing.T) {
+	p := mustNew[int](t, Config{
+		Mode:      ModeRateLimit,
+		Interval:  time.Second,
+		MaxItems:  2,
+		QueueSize: 16,
+	})
+	defer p.Stop()
+
+	for i := 0; i < 6; i++ {
+		mustPush(t, p, i)
+	}
+
+	received := 0
+	deadline := time.After(200 * time.Millisecond)
+collect:
+	for {
+		select {
+		case <-p.Updates():
+			received++
+		case <-deadline:
+			break collect
+		}
+	}
+	if received != 2 {
+		t.Fatalf("emitted %d items in one interval, want 2", received)
+	}
+}
+
+// TestOverflowDropOldestEvictsRetained verifies that a full mode-local queue
+// evicts its oldest item to admit the newest push instead of dropping the push.
+func TestOverflowDropOldestEvictsRetained(t *testing.T) {
+	p := mustNew[int](t, Config{
+		Mode:        ModeQueue,
+		Interval:    time.Hour,
+		QueueSize:   2,
+		Overflow:    OverflowDropOldest,
+		DrainOnStop: true,
+	})
+
+	for i := 1; i <= 3; i++ {
+		mustPush(t, p, i)
+	}
+
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		p.Stop()
+	}()
+
+	var got []int
+	for v := range p.Updates() {
+		got = append(got, v)
+	}
+	if len(got) != 2 {
+		t.Fatalf("DropOldest: got %v, want 2 retained items", got)
+	}
+	if got[len(got)-1] != 3 {
+		t.Fatalf("DropOldest dropped the newest item: got %v", got)
+	}
+}
+
 func TestConcurrentPushStopRace(t *testing.T) {
 	p := mustNew[int](t, Config{Mode: ModeDebounce, Interval: time.Millisecond})
 	var wg sync.WaitGroup

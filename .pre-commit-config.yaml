@@ -3,13 +3,13 @@ repos:
     hooks:
       - id: trailing-whitespace
         name: trailing whitespace
-        entry: bash -c 'files=$(git diff --cached --name-only --diff-filter=ACM); [ -z "$files" ] || echo "$files" | xargs -r sed -i "s/[[:space:]]*$//"'
+        entry: bash -c 'while IFS= read -r -d "" f; do sed -i.bak -- "s/[[:space:]]*$//" "$f" && rm -f -- "$f.bak"; done < <(git diff --cached --name-only -z --diff-filter=ACM)'
         language: system
         pass_filenames: false
 
       - id: end-of-file-fixer
         name: end of file fixer
-        entry: bash -c 'files=$(git diff --cached --name-only --diff-filter=ACM); for f in $files; do [ -s "$f" ] && [ -n "$(tail -c1 "$f")" ] && echo >> "$f"; done'
+        entry: bash -c 'changed=0; while IFS= read -r -d "" f; do if [ -s "$f" ] && [ -n "$(tail -c1 -- "$f")" ]; then echo >> "$f"; changed=1; fi; done < <(git diff --cached --name-only -z --diff-filter=ACM); [ "$changed" -eq 0 ]'
         language: system
         pass_filenames: false
 
