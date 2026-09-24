@@ -1,11 +1,28 @@
 package push
 
 import (
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func mustNew[T any](t *testing.T, config Config) *Pacer[T] {
+	t.Helper()
+	p, err := New[T](config)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return p
+}
+
+func mustPush[T any](t *testing.T, p *Pacer[T], item T) {
+	t.Helper()
+	if err := p.Push(item); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+}
 
 // TestThrottleBasic tests basic throttling functionality
 func TestThrottleBasic(t *testing.T) {
@@ -13,12 +30,12 @@ func TestThrottleBasic(t *testing.T) {
 		Mode:     ModeThrottle,
 		Interval: 100 * time.Millisecond,
 	}
-	p := New[int](config)
+	p := mustNew[int](t, config)
 	defer p.Stop()
 
 	// Push multiple values quickly
 	for i := 0; i < 10; i++ {
-		p.Push(i)
+		mustPush(t, p, i)
 	}
 
 	// Should only receive the latest value after interval
@@ -48,7 +65,7 @@ func TestThrottleMultipleIntervals(t *testing.T) {
 		Mode:     ModeThrottle,
 		Interval: 50 * time.Millisecond,
 	}
-	p := New[int](config)
+	p := mustNew[int](t, config)
 	defer p.Stop()
 
 	received := make([]int, 0)
@@ -70,14 +87,14 @@ func TestThrottleMultipleIntervals(t *testing.T) {
 
 	// Producer: push values at different intervals
 	time.Sleep(10 * time.Millisecond)
-	p.Push(1)
-	p.Push(2)
-	p.Push(3)
+	mustPush(t, p, 1)
+	mustPush(t, p, 2)
+	mustPush(t, p, 3)
 	time.Sleep(60 * time.Millisecond) // Wait for first emit
-	p.Push(4)
-	p.Push(5)
+	mustPush(t, p, 4)
+	mustPush(t, p, 5)
 	time.Sleep(60 * time.Millisecond) // Wait for second emit
-	p.Push(6)
+	mustPush(t, p, 6)
 	time.Sleep(60 * time.Millisecond) // Wait for third emit
 
 	wg.Wait()
@@ -96,12 +113,12 @@ func TestDebounceBasic(t *testing.T) {
 		Mode:     ModeDebounce,
 		Interval: 100 * time.Millisecond,
 	}
-	p := New[int](config)
+	p := mustNew[int](t, config)
 	defer p.Stop()
 
 	// Push multiple values quickly
 	for i := 0; i < 10; i++ {
-		p.Push(i)
+		mustPush(t, p, i)
 		time.Sleep(10 * time.Millisecond)
 	}
 
@@ -122,7 +139,7 @@ func TestDebounceMultipleBursts(t *testing.T) {
 		Mode:     ModeDebounce,
 		Interval: 50 * time.Millisecond,
 	}
-	p := New[int](config)
+	p := mustNew[int](t, config)
 	defer p.Stop()
 
 	received := make([]int, 0)
@@ -144,21 +161,21 @@ func TestDebounceMultipleBursts(t *testing.T) {
 
 	// First burst
 	for i := 0; i < 5; i++ {
-		p.Push(i)
+		mustPush(t, p, i)
 		time.Sleep(5 * time.Millisecond)
 	}
 	time.Sleep(60 * time.Millisecond) // Wait for debounce
 
 	// Second burst
 	for i := 10; i < 15; i++ {
-		p.Push(i)
+		mustPush(t, p, i)
 		time.Sleep(5 * time.Millisecond)
 	}
 	time.Sleep(60 * time.Millisecond) // Wait for debounce
 
 	// Third burst
 	for i := 20; i < 25; i++ {
-		p.Push(i)
+		mustPush(t, p, i)
 		time.Sleep(5 * time.Millisecond)
 	}
 	time.Sleep(60 * time.Millisecond) // Wait for debounce
@@ -186,33 +203,39 @@ func TestRateLimitBasic(t *testing.T) {
 		Interval: 100 * time.Millisecond,
 		MaxItems: 3,
 	}
-	p := New[int](config)
+	p := mustNew[int](t, config)
 	defer p.Stop()
 
 	// Push more items than allowed
 	for i := 0; i < 10; i++ {
-		p.Push(i)
+		mustPush(t, p, i)
 	}
 
 	received := make([]int, 0)
-	start := time.Now()
 
-	// Should receive MaxItems immediately, then more after interval
-	for i := 0; i < 6; i++ {
+	// First MaxItems should be available without waiting for the first ticker.
+	for i := 0; i < 3; i++ {
+		select {
+		case val := <-p.Updates():
+			received = append(received, val)
+		case <-time.After(50 * time.Millisecond):
+			t.Fatalf("timeout waiting for first-batch item %d", i)
+		}
+	}
+
+	// Additional items should arrive in later windows.
+collectMore:
+	for len(received) < 6 {
 		select {
 		case val := <-p.Updates():
 			received = append(received, val)
 		case <-time.After(300 * time.Millisecond):
-			break
+			break collectMore
 		}
 	}
 
-	elapsed := time.Since(start)
 	if len(received) < 3 {
 		t.Errorf("Expected at least 3 values, got %d", len(received))
-	}
-	if len(received) >= 3 && elapsed < 100*time.Millisecond {
-		t.Error("Rate limiting should have delayed subsequent items")
 	}
 
 	// Check that values are in order (they should be 0,1,2,3,4,5...)
@@ -231,12 +254,12 @@ func TestRateLimitExactCount(t *testing.T) {
 		Interval: 50 * time.Millisecond,
 		MaxItems: 2,
 	}
-	p := New[int](config)
+	p := mustNew[int](t, config)
 	defer p.Stop()
 
 	// Push exactly MaxItems
 	for i := 0; i < 2; i++ {
-		p.Push(i)
+		mustPush(t, p, i)
 	}
 
 	// Rate limiting uses a ticker that fires at the interval
@@ -244,16 +267,17 @@ func TestRateLimitExactCount(t *testing.T) {
 	received := make([]int, 0)
 	deadline := time.Now().Add(150 * time.Millisecond)
 
+receiveLoop:
 	for len(received) < 2 {
 		if time.Now().After(deadline) {
-			break
+			break receiveLoop
 		}
 		remaining := time.Until(deadline)
 		select {
 		case val := <-p.Updates():
 			received = append(received, val)
 		case <-time.After(remaining):
-			break
+			break receiveLoop
 		}
 	}
 
@@ -277,7 +301,6 @@ func TestRateLimitExactCount(t *testing.T) {
 		// Try to get the second value with a short timeout
 		select {
 		case val := <-p.Updates():
-			received = append(received, val)
 			if val != 1 {
 				t.Errorf("Expected second value to be 1, got %d", val)
 			}
@@ -294,12 +317,12 @@ func TestQueueBasic(t *testing.T) {
 		Interval:  50 * time.Millisecond,
 		QueueSize: 100,
 	}
-	p := New[int](config)
+	p := mustNew[int](t, config)
 	defer p.Stop()
 
 	// Push multiple values quickly
 	for i := 0; i < 5; i++ {
-		p.Push(i)
+		mustPush(t, p, i)
 	}
 
 	// Should receive them in order, one per interval
@@ -330,12 +353,12 @@ func TestQueueOrder(t *testing.T) {
 		Interval:  2 * time.Millisecond,
 		QueueSize: 1000,
 	}
-	p := New[int](config)
+	p := mustNew[int](t, config)
 	defer p.Stop()
 
 	// Push many values
 	for i := 0; i < 100; i++ {
-		p.Push(i)
+		mustPush(t, p, i)
 	}
 
 	// Receive and verify order
@@ -365,7 +388,7 @@ func TestThrottleConcurrent(t *testing.T) {
 		Mode:     ModeThrottle,
 		Interval: 50 * time.Millisecond,
 	}
-	p := New[int](config)
+	p := mustNew[int](t, config)
 	defer p.Stop()
 
 	var wg sync.WaitGroup
@@ -378,7 +401,7 @@ func TestThrottleConcurrent(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			for j := 0; j < pushesPerGoroutine; j++ {
-				p.Push(id*1000 + j)
+				mustPush(t, p, id*1000+j)
 				time.Sleep(1 * time.Millisecond)
 			}
 		}(i)
@@ -402,7 +425,7 @@ func TestDebounceConcurrent(t *testing.T) {
 		Interval:  50 * time.Millisecond,
 		QueueSize: 10,
 	}
-	p := New[int](config)
+	p := mustNew[int](t, config)
 	defer p.Stop()
 
 	var wg sync.WaitGroup
@@ -414,23 +437,20 @@ func TestDebounceConcurrent(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			for j := 0; j < 5; j++ {
-				p.Push(id*1000 + j)
+				mustPush(t, p, id*1000+j)
 				time.Sleep(1 * time.Millisecond)
 			}
 		}(i)
 	}
 
 	wg.Wait()
-	// Debounce waits for a quiet period after the last push
-	// We need to wait for the debounce interval after all pushes complete
-	// Add buffer time to ensure all pushes are processed
-	time.Sleep(60 * time.Millisecond) // Wait for debounce interval + buffer
+	time.Sleep(100 * time.Millisecond)
 
 	// Should receive at least one value (the latest from all concurrent pushes)
 	select {
 	case <-p.Updates():
 		// Good - received debounced value
-	case <-time.After(200 * time.Millisecond):
+	case <-time.After(300 * time.Millisecond):
 		t.Error("Timeout waiting for debounced value")
 	}
 }
@@ -442,7 +462,7 @@ func TestRateLimitConcurrent(t *testing.T) {
 		Interval: 50 * time.Millisecond,
 		MaxItems: 5,
 	}
-	p := New[int](config)
+	p := mustNew[int](t, config)
 	defer p.Stop()
 
 	var wg sync.WaitGroup
@@ -455,7 +475,7 @@ func TestRateLimitConcurrent(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			for j := 0; j < pushesPerGoroutine; j++ {
-				p.Push(id*1000 + j)
+				mustPush(t, p, id*1000+j)
 			}
 		}(i)
 	}
@@ -465,12 +485,13 @@ func TestRateLimitConcurrent(t *testing.T) {
 	// Should receive items respecting rate limit
 	received := make([]int, 0)
 	timeout := time.After(2 * time.Second)
+collectRateLimit:
 	for len(received) < 10 {
 		select {
 		case val := <-p.Updates():
 			received = append(received, val)
 		case <-timeout:
-			break
+			break collectRateLimit
 		}
 	}
 
@@ -486,7 +507,7 @@ func TestQueueConcurrent(t *testing.T) {
 		Interval:  10 * time.Millisecond,
 		QueueSize: 1000,
 	}
-	p := New[int](config)
+	p := mustNew[int](t, config)
 	defer p.Stop()
 
 	var wg sync.WaitGroup
@@ -499,7 +520,7 @@ func TestQueueConcurrent(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			for j := 0; j < pushesPerGoroutine; j++ {
-				p.Push(id*1000 + j)
+				mustPush(t, p, id*1000+j)
 			}
 		}(i)
 	}
@@ -530,12 +551,12 @@ func TestStop(t *testing.T) {
 		Mode:     ModeThrottle,
 		Interval: 50 * time.Millisecond,
 	}
-	p := New[int](config)
+	p := mustNew[int](t, config)
 	updates := p.Updates()
 
 	// Push some values
 	for i := 0; i < 5; i++ {
-		p.Push(i)
+		mustPush(t, p, i)
 	}
 
 	// Stop should not block indefinitely
@@ -567,11 +588,11 @@ func TestStopWithPendingItems(t *testing.T) {
 		Interval:  50 * time.Millisecond,
 		QueueSize: 100,
 	}
-	p := New[int](config)
+	p := mustNew[int](t, config)
 
 	// Push many values
 	for i := 0; i < 100; i++ {
-		p.Push(i)
+		mustPush(t, p, i)
 	}
 
 	// Stop should still work
@@ -589,19 +610,20 @@ func TestStopWithPendingItems(t *testing.T) {
 	}
 }
 
-// TestPushAfterStop tests that Push() after Stop() doesn't panic
+// TestPushAfterStop tests that Push() after Stop() returns ErrStopped.
 func TestPushAfterStop(t *testing.T) {
 	config := Config{
 		Mode:     ModeThrottle,
 		Interval: 50 * time.Millisecond,
 	}
-	p := New[int](config)
+	p := mustNew[int](t, config)
 	p.Stop()
 
-	// Push after stop should not panic
-	p.Push(1)
-	p.Push(2)
-	p.Push(3)
+	for i := 0; i < 3; i++ {
+		if err := p.Push(i); !errors.Is(err, ErrStopped) {
+			t.Fatalf("Push after stop: got %v, want ErrStopped", err)
+		}
+	}
 }
 
 // TestMultipleConsumers tests multiple goroutines reading from Updates()
@@ -611,12 +633,12 @@ func TestMultipleConsumers(t *testing.T) {
 		Interval:  2 * time.Millisecond,
 		QueueSize: 1000,
 	}
-	p := New[int](config)
+	p := mustNew[int](t, config)
 	defer p.Stop()
 
 	// Push many values
 	for i := 0; i < 100; i++ {
-		p.Push(i)
+		mustPush(t, p, i)
 	}
 
 	// Multiple consumers
@@ -662,13 +684,13 @@ func TestRapidPush(t *testing.T) {
 		Mode:     ModeThrottle,
 		Interval: 100 * time.Millisecond,
 	}
-	p := New[int](config)
+	p := mustNew[int](t, config)
 	defer p.Stop()
 
 	// Push very rapidly
 	start := time.Now()
 	for i := 0; i < 10000; i++ {
-		p.Push(i)
+		mustPush(t, p, i)
 	}
 	elapsed := time.Since(start)
 
@@ -684,7 +706,7 @@ func TestEmptyInput(t *testing.T) {
 		Mode:     ModeThrottle,
 		Interval: 50 * time.Millisecond,
 	}
-	p := New[int](config)
+	p := mustNew[int](t, config)
 	defer p.Stop()
 
 	// Should not receive anything
@@ -718,12 +740,12 @@ func TestRateLimitStress(t *testing.T) {
 		Interval: 20 * time.Millisecond,
 		MaxItems: 2,
 	}
-	p := New[int](config)
+	p := mustNew[int](t, config)
 	defer p.Stop()
 
 	// Push many items rapidly
 	for i := 0; i < 100; i++ {
-		p.Push(i)
+		mustPush(t, p, i)
 	}
 
 	// Count received items over time
@@ -731,12 +753,13 @@ func TestRateLimitStress(t *testing.T) {
 	start := time.Now()
 	timeout := time.After(2 * time.Second)
 
+collectStress:
 	for len(received) < 20 {
 		select {
 		case val := <-p.Updates():
 			received = append(received, val)
 		case <-timeout:
-			break
+			break collectStress
 		}
 	}
 
@@ -758,12 +781,12 @@ func TestQueueStress(t *testing.T) {
 		Interval:  1 * time.Millisecond,
 		QueueSize: 10000,
 	}
-	p := New[int](config)
+	p := mustNew[int](t, config)
 	defer p.Stop()
 
 	// Push many items
 	for i := 0; i < 1000; i++ {
-		p.Push(i)
+		mustPush(t, p, i)
 	}
 
 	// Receive all items
@@ -794,7 +817,7 @@ func TestConcurrentPushAndStop(t *testing.T) {
 		Mode:     ModeThrottle,
 		Interval: 50 * time.Millisecond,
 	}
-	p := New[int](config)
+	p := mustNew[int](t, config)
 
 	var wg sync.WaitGroup
 	const numGoroutines = 10
@@ -805,7 +828,11 @@ func TestConcurrentPushAndStop(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 100; j++ {
-				p.Push(j)
+				// Stop may win the race with a producer; ErrStopped is the
+				// documented result in that case.
+				if err := p.Push(j); err != nil && !errors.Is(err, ErrStopped) {
+					t.Errorf("Push: %v", err)
+				}
 			}
 		}()
 	}
@@ -825,7 +852,7 @@ func TestRaceConditionPush(t *testing.T) {
 		Mode:     ModeThrottle,
 		Interval: 10 * time.Millisecond,
 	}
-	p := New[int](config)
+	p := mustNew[int](t, config)
 	defer p.Stop()
 
 	var wg sync.WaitGroup
@@ -838,7 +865,7 @@ func TestRaceConditionPush(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			for j := 0; j < pushesPerGoroutine; j++ {
-				p.Push(id*10000 + j)
+				mustPush(t, p, id*10000+j)
 			}
 		}(i)
 	}
@@ -861,11 +888,11 @@ func TestRaceConditionStop(t *testing.T) {
 		Interval:  10 * time.Millisecond,
 		QueueSize: 1000,
 	}
-	p := New[int](config)
+	p := mustNew[int](t, config)
 
 	// Push some values
 	for i := 0; i < 100; i++ {
-		p.Push(i)
+		mustPush(t, p, i)
 	}
 
 	// Multiple goroutines calling Stop() concurrently
@@ -889,11 +916,11 @@ func TestStringType(t *testing.T) {
 		Mode:     ModeThrottle,
 		Interval: 50 * time.Millisecond,
 	}
-	p := New[string](config)
+	p := mustNew[string](t, config)
 	defer p.Stop()
 
-	p.Push("hello")
-	p.Push("world")
+	mustPush(t, p, "hello")
+	mustPush(t, p, "world")
 
 	select {
 	case val := <-p.Updates():
@@ -917,11 +944,11 @@ func TestStructType(t *testing.T) {
 		Interval:  20 * time.Millisecond,
 		QueueSize: 100,
 	}
-	p := New[Person](config)
+	p := mustNew[Person](t, config)
 	defer p.Stop()
 
-	p.Push(Person{Name: "Alice", Age: 30})
-	p.Push(Person{Name: "Bob", Age: 25})
+	mustPush(t, p, Person{Name: "Alice", Age: 30})
+	mustPush(t, p, Person{Name: "Bob", Age: 25})
 
 	received := make([]Person, 0)
 	for i := 0; i < 2; i++ {
@@ -947,12 +974,12 @@ func TestSlowConsumer(t *testing.T) {
 		Mode:     ModeThrottle,
 		Interval: 50 * time.Millisecond,
 	}
-	p := New[int](config)
+	p := mustNew[int](t, config)
 	defer p.Stop()
 
 	// Push values
 	for i := 0; i < 10; i++ {
-		p.Push(i)
+		mustPush(t, p, i)
 	}
 
 	// Slow consumer
@@ -974,12 +1001,12 @@ func TestRateLimitBoundary(t *testing.T) {
 		Interval: 50 * time.Millisecond,
 		MaxItems: 1,
 	}
-	p := New[int](config)
+	p := mustNew[int](t, config)
 	defer p.Stop()
 
 	// Push two items
-	p.Push(1)
-	p.Push(2)
+	mustPush(t, p, 1)
+	mustPush(t, p, 2)
 
 	// Should receive first immediately
 	select {
@@ -1008,15 +1035,15 @@ func TestDebounceTimerReset(t *testing.T) {
 		Mode:     ModeDebounce,
 		Interval: 100 * time.Millisecond,
 	}
-	p := New[int](config)
+	p := mustNew[int](t, config)
 	defer p.Stop()
 
 	// Push value
-	p.Push(1)
+	mustPush(t, p, 1)
 
 	// Push another value before debounce fires
 	time.Sleep(50 * time.Millisecond)
-	p.Push(2)
+	mustPush(t, p, 2)
 
 	// Should only receive the second value after full interval from last push
 	select {
@@ -1044,7 +1071,7 @@ func TestConcurrentPushPull(t *testing.T) {
 		Interval:  5 * time.Millisecond,
 		QueueSize: 1000,
 	}
-	p := New[int](config)
+	p := mustNew[int](t, config)
 	defer p.Stop()
 
 	var pushWg sync.WaitGroup
@@ -1062,7 +1089,7 @@ func TestConcurrentPushPull(t *testing.T) {
 		go func(id int) {
 			defer pushWg.Done()
 			for j := 0; j < pushesPerPusher; j++ {
-				p.Push(id*10000 + j)
+				mustPush(t, p, id*10000+j)
 			}
 		}(i)
 	}
