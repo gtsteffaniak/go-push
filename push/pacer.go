@@ -67,11 +67,16 @@ func New[T any](config Config) (*Pacer[T], error) {
 }
 
 // Push enqueues an item using context.Background().
+//
+// A nil error means the item was retained for delivery. It is removed later
+// only by an explicit policy: OverflowDropOldest may evict it to admit a newer
+// item, and DrainOnStop may drop it if Updates is not read within PushTimeout.
 func (p *Pacer[T]) Push(item T) error {
 	return p.PushContext(context.Background(), item)
 }
 
 // PushContext enqueues an item respecting the configured overflow policy.
+// A nil error has the same retention guarantee as Push.
 func (p *Pacer[T]) PushContext(ctx context.Context, item T) error {
 	if atomic.LoadInt32(&p.stopped) != 0 {
 		return ErrStopped
@@ -96,8 +101,9 @@ func (p *Pacer[T]) maxPending() int {
 
 // tryAcquire atomically reserves one capacity slot, counting both items still in
 // the input channel and items retained in mode-local storage. It returns false
-// when the pipeline is already at capacity. The reservation is released by
-// releaseInFlight when the item leaves the pipeline.
+// when the pipeline is already at capacity. The reservation stays held until
+// retainPending publishes the item into that storage, so a concurrent Push
+// cannot observe the slot as free while the item is still being retained.
 func (p *Pacer[T]) tryAcquire() bool {
 	limit := p.maxPending()
 	if limit <= 0 {
@@ -124,6 +130,50 @@ func (p *Pacer[T]) emit(ctx context.Context, item T) bool {
 
 func (p *Pacer[T]) releaseInFlight() {
 	p.inFlight.Add(-1)
+}
+
+// retainPending moves an admitted item into mode-local storage. The in-flight
+// reservation is released only after pending reflects the retained item. Releasing
+// earlier opens a window where another Push observes free capacity, returns nil,
+// and then loses the item once the buffer is observed full.
+//
+// OverflowDropOldest is the only policy that drops an item whose Push already
+// returned nil: it evicts the oldest buffered value to make room. Every other
+// policy keeps the accepted item. Capacity for those policies is enforced by
+// tryAcquire before Push returns.
+func (p *Pacer[T]) retainPending(buf []T, val T, limit int) []T {
+	if limit > 0 && len(buf) >= limit && p.config.Overflow == OverflowDropOldest {
+		buf = buf[1:]
+		p.recordDrop("dropped oldest item")
+	}
+	buf = append(buf, val)
+	p.setPending(len(buf))
+	p.releaseInFlight()
+	return buf
+}
+
+// drainRetained delivers items still held at Stop when DrainOnStop is set.
+// The run context is already canceled, so each send uses its own timeout.
+// A consumer must be reading Updates. If a send exceeds PushTimeout, the rest
+// are dropped and counted so Stop cannot block forever.
+func (p *Pacer[T]) drainRetained(items []T) {
+	if p.config.DrainOnStop {
+		for i, item := range items {
+			if !p.sendWithinPushTimeout(item) {
+				for range items[i:] {
+					p.recordDrop("drain timed out")
+				}
+				break
+			}
+		}
+	}
+	p.setPending(0)
+}
+
+func (p *Pacer[T]) sendWithinPushTimeout(item T) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), p.config.PushTimeout)
+	defer cancel()
+	return p.sendBlocking(ctx, item)
 }
 
 // collectInput moves every value still buffered in the input channel into

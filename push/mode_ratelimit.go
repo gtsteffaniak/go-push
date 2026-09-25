@@ -35,32 +35,13 @@ func (p *Pacer[T]) runRateLimit(ctx context.Context) {
 				pending = append(pending, val)
 				p.setPending(len(pending))
 			})
-			if p.config.DrainOnStop {
-				// ctx is already canceled here, so use a fresh context to
-				// deliver the remaining items instead of discarding them.
-				for len(pending) > 0 {
-					if !p.sendBlocking(context.Background(), pending[0]) {
-						break
-					}
-					pending = pending[1:]
-				}
-			}
-			p.setPending(0)
+			// ctx is already canceled. Drain on a timeout so Stop cannot
+			// block forever when nothing is reading Updates.
+			p.drainRetained(pending)
 			return
 
 		case val := <-p.input:
-			p.releaseInFlight()
-			if limit > 0 && len(pending) >= limit {
-				if p.config.Overflow == OverflowDropOldest {
-					pending = pending[1:]
-					p.recordDrop("dropped oldest item")
-				} else {
-					p.recordDrop("rate limit pending full")
-					continue
-				}
-			}
-			pending = append(pending, val)
-			p.setPending(len(pending))
+			pending = p.retainPending(pending, val, limit)
 			flush()
 
 		case <-ticker.C:

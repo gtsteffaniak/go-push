@@ -24,6 +24,8 @@ const (
 	// OverflowDropNewest waits up to PushTimeout for space, then returns ErrOverflow.
 	OverflowDropNewest Overflow = iota
 	// OverflowDropOldest removes the oldest buffered item to make room for the new one.
+	// The evicted item may be one whose Push already returned nil. That removal is
+	// counted in Stats.Dropped.
 	OverflowDropOldest
 	// OverflowBlock waits until space is available, the context is cancelled, or Stop is called.
 	OverflowBlock
@@ -44,7 +46,10 @@ type Config struct {
 	Overflow Overflow
 	// PushTimeout is how long OverflowDropNewest waits before returning ErrOverflow.
 	PushTimeout time.Duration
-	// DrainOnStop emits remaining queued items when Stop is called (queue/rate-limit).
+	// DrainOnStop delivers items still buffered by ModeQueue and ModeRateLimit when
+	// Stop is called. A consumer must be reading Updates during Stop. Each send
+	// waits at most PushTimeout; if that elapses, the rest are dropped, counted
+	// in Stats.Dropped, and Stop returns.
 	DrainOnStop bool
 	// Logger receives diagnostic messages. Nil defaults to NopLogger.
 	Logger Logger
