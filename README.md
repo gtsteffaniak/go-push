@@ -70,7 +70,7 @@ type Config struct {
     QueueSize   int           // Input buffer + max pending (queue/rate-limit)
     Overflow    Overflow      // DropNewest (default), DropOldest, Block
     PushTimeout time.Duration // DropNewest wait before ErrOverflow (default 50ms)
-    DrainOnStop bool          // Emit remaining queue/rate-limit items on Stop
+    DrainOnStop bool          // Deliver buffered queue/rate-limit items on Stop (needs a reader)
     Logger      Logger        // Optional; defaults to NopLogger
 }
 ```
@@ -80,8 +80,10 @@ type Config struct {
 | Policy | Behavior |
 |--------|----------|
 | `OverflowDropNewest` | Wait up to `PushTimeout`, then return `ErrOverflow` |
-| `OverflowDropOldest` | Remove the oldest buffered item to make room |
+| `OverflowDropOldest` | Remove the oldest buffered item to make room. A previous successful `Push` may be the one removed; that eviction increments `Stats.Dropped`. |
 | `OverflowBlock` | Block until space is available, context cancelled, or `Stop` |
+
+A nil error from `Push` means the item was retained. It is delivered later, or removed only by an explicit policy: `OverflowDropOldest` (evict to admit a newer item) or `DrainOnStop` timing out because nothing is reading `Updates`.
 
 Blocking queue (jobs you cannot lose):
 
@@ -93,6 +95,10 @@ p, err := push.New[Job](push.Config{
     Overflow:  push.OverflowBlock,
 })
 ```
+
+### DrainOnStop
+
+`DrainOnStop` delivers items still buffered by queue and rate-limit modes during `Stop`. Something must be receiving from `Updates` while `Stop` runs. Each remaining item is offered for at most `PushTimeout`. If a send times out, the rest are dropped, `Stats.Dropped` increases, and `Stop` returns. `Stop` does not block forever waiting for a reader.
 
 ### Logging with go-logger
 

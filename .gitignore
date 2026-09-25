@@ -1,3 +1,4 @@
 go-push
 bin/
 *.exe
+/stock

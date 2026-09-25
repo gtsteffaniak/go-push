@@ -5,7 +5,9 @@
 // a single Go process.
 //
 // Create a pacer with New, push items with Push or PushContext, receive regulated
-// output on Updates, and call Stop when finished.
+// output on Updates, and call Stop when finished. A nil error from Push means the
+// item was retained. DrainOnStop needs a consumer reading Updates; each remaining
+// send waits at most PushTimeout, and if that elapses Stop drops the rest and returns.
 //
 // Example:
 //
