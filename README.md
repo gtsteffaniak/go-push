@@ -1,8 +1,8 @@
 # go-push
 
-**Not a notification library.** go-push is an in-process generic data-flow pacer for Go: throttle, debounce, rate-limit, and queue values between producers and consumers inside a single process.
+this is an in-process generic data-flow pacer for Go: throttle, debounce, rate-limit, and queue values between producers and consumers inside a single process. It is not a notification library.
 
-Use it for UI refresh coalescing, search debounce, API pacing, sensor sampling, and ordered job dispatch — not for APNs, FCM, or Web Push.
+Use it for UI refresh coalescing, search debounce, API pacing, sensor sampling, and ordered job dispatch.
 
 ## Features
 
