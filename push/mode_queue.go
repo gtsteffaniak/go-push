@@ -10,7 +10,7 @@ func (p *Pacer[T]) runQueue(ctx context.Context) {
 	defer ticker.Stop()
 
 	queue := make([]T, 0)
-	cap := p.maxPending()
+	limit := p.maxPending()
 
 	emitOne := func() {
 		if len(queue) == 0 {
@@ -30,22 +30,11 @@ func (p *Pacer[T]) runQueue(ctx context.Context) {
 				queue = append(queue, val)
 				p.setPending(len(queue))
 			})
-			p.drainQueue(context.Background(), &queue)
+			p.drainRetained(queue)
 			return
 
 		case val := <-p.input:
-			p.releaseInFlight()
-			if cap > 0 && len(queue) >= cap {
-				if p.config.Overflow == OverflowDropOldest {
-					queue = queue[1:]
-					p.recordDrop("dropped oldest item")
-				} else {
-					p.recordDrop("queue full")
-					continue
-				}
-			}
-			queue = append(queue, val)
-			p.setPending(len(queue))
+			queue = p.retainPending(queue, val, limit)
 
 		case <-ticker.C:
 			emitOne()
@@ -55,7 +44,7 @@ func (p *Pacer[T]) runQueue(ctx context.Context) {
 
 func (p *Pacer[T]) runQueueUnpaced(ctx context.Context) {
 	queue := make([]T, 0)
-	cap := p.maxPending()
+	limit := p.maxPending()
 
 	tryEmit := func() {
 		for len(queue) > 0 {
@@ -74,37 +63,12 @@ func (p *Pacer[T]) runQueueUnpaced(ctx context.Context) {
 				queue = append(queue, val)
 				p.setPending(len(queue))
 			})
-			p.drainQueue(context.Background(), &queue)
+			p.drainRetained(queue)
 			return
 
 		case val := <-p.input:
-			p.releaseInFlight()
-			if cap > 0 && len(queue) >= cap {
-				if p.config.Overflow == OverflowDropOldest {
-					queue = queue[1:]
-					p.recordDrop("dropped oldest item")
-				} else {
-					p.recordDrop("queue full")
-					continue
-				}
-			}
-			queue = append(queue, val)
-			p.setPending(len(queue))
+			queue = p.retainPending(queue, val, limit)
 			tryEmit()
 		}
 	}
-}
-
-func (p *Pacer[T]) drainQueue(ctx context.Context, queue *[]T) {
-	if !p.config.DrainOnStop {
-		p.setPending(0)
-		return
-	}
-	for len(*queue) > 0 {
-		if !p.sendBlocking(ctx, (*queue)[0]) {
-			break
-		}
-		*queue = (*queue)[1:]
-	}
-	p.setPending(len(*queue))
 }

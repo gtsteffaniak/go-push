@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased
+
+### Fixed
+
+- `Stop` with `DrainOnStop` no longer blocks forever when nothing is reading `Updates`. Each remaining item is offered for at most `PushTimeout`; on timeout the rest are counted in `Stats.Dropped` and `Stop` returns.
+- Queue and rate-limit modes no longer release an in-flight reservation before the item is retained. A `Push` that returns nil stays retained unless `OverflowDropOldest` evicts it or a `DrainOnStop` send times out.
+
+### Removed
+
+- Deleted the committed `stock` ELF at the repository root and ignored `/stock`. The demo remains `examples/stock`.
+
 ## v1.0.0
 
 ### Added
